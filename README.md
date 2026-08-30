@@ -128,7 +128,15 @@ itself.
 
 `:core:test` runs on every push and pull request with no configuration. Building `:app` needs the
 package token, so add your PAT as a repository secret named `MWDAT_PACKAGES_TOKEN` — until you
-do, the Android job is skipped rather than failed.
+do, the Android job is skipped rather than failed. Forked pull requests never see the secret, so
+they run the protocol tests only.
+
+Every green build on `main` uploads a debug APK, which is the quickest way to get it onto two
+phones:
+
+```bash
+gh run download --repo fvtale/GlassesGate --name glassesgate-debug-apk
+```
 
 ## Contributing
 
