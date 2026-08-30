@@ -14,7 +14,13 @@ import androidx.security.crypto.MasterKey
  * This protects the secrets at rest against another app or an offline dump of the data
  * directory. It does not protect them from a rooted device or from someone holding an unlocked
  * phone, which is why revocation exists.
+ *
+ * `androidx.security.crypto` is deprecated with no drop-in replacement -- the guidance is to
+ * move to a keystore-backed scheme of your own. Suppressed rather than silently ignored: it
+ * still works, it is still the least-bad option for a project this size, and the day it stops
+ * being that is the day this comment should send someone here.
  */
+@Suppress("DEPRECATION")
 internal object SecurePrefs {
 
     fun open(context: Context, name: String): SharedPreferences =

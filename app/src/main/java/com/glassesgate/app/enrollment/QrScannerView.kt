@@ -1,6 +1,8 @@
 package com.glassesgate.app.enrollment
 
+import androidx.annotation.OptIn
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -28,7 +30,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Camera preview that reads an enrollment code and calls [onDecoded] exactly once.
  *
  * Callers are responsible for holding the CAMERA permission before composing this.
+ *
+ * `ImageProxy.getImage` is still opt-in in CameraX. Handing ML Kit the underlying `Image` is the
+ * documented path and avoids copying every frame out of the buffer, so the opt-in is taken
+ * deliberately rather than worked around.
  */
+@OptIn(ExperimentalGetImage::class)
 @Composable
 fun QrScannerView(modifier: Modifier = Modifier, onDecoded: (String) -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
