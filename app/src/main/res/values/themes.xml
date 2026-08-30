@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose paints everything; this theme exists only so the window itself is the right
+         colour before the first frame, and so there is no action bar to hide. -->
+    <style name="Theme.GlassesGate" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/background_light</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

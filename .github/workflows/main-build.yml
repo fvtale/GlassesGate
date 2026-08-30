@@ -1,0 +1,95 @@
+name: main
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: main-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The protocol module has no Android and no DAT dependency, so this job needs no SDK and no
+  # package token. It is the check that always runs, and the one that guards the security claims.
+  core:
+    name: Protocol tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The wrapper jar is a binary in the repo. Validating it against Gradle's published
+      # checksums is what makes committing one defensible.
+      - uses: gradle/actions/wrapper-validation@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: ./gradlew :core:test --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: core-test-report
+          path: core/build/reports/tests/test
+
+  probe-token:
+    name: Check for DAT package access
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.probe.outputs.available }}
+    steps:
+      - id: probe
+        env:
+          TOKEN: ${{ secrets.MWDAT_PACKAGES_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::MWDAT_PACKAGES_TOKEN is not set, so the Android app was not built. \
+          Add a classic PAT with read:packages as a repository secret to enable it."
+          fi
+
+  # The Meta DAT SDK is served from GitHub Packages under the facebook org, and the default
+  # GITHUB_TOKEN cannot read packages it does not own. This job needs a real PAT, so it is
+  # skipped rather than failed when the repository has not been given one.
+  app:
+    name: Android app
+    needs: probe-token
+    if: needs.probe-token.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gradle/actions/wrapper-validation@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble and lint
+        env:
+          GITHUB_TOKEN: ${{ secrets.MWDAT_PACKAGES_TOKEN }}
+        run: ./gradlew :app:assembleDebug :app:lintDebug --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glassesgate-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.html

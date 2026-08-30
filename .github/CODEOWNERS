@@ -1,0 +1,12 @@
+# Default owner for everything.
+*                                   @fvtale
+
+# The protocol module and its tests are where the security properties actually live.
+# Nothing here should change without a deliberate review of what claim is being altered.
+/core/                              @fvtale
+/SECURITY.md                        @fvtale
+
+# Build, CI, and agent instructions.
+/.github/                           @fvtale
+/gradle/                            @fvtale
+/AGENTS.md                          @fvtale

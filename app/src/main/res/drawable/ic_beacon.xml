@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Notification icons are masked to a silhouette, so this is a solid white glyph. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,10m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M7.05,5.05L5.64,3.64C3.72,5.56 2.75,8.08 2.75,10.6h2C4.75,8.6 5.52,6.58 7.05,5.05z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M18.36,3.64l-1.41,1.41c1.53,1.53 2.3,3.55 2.3,5.55h2C21.25,8.08 20.28,5.56 18.36,3.64z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M11,14h2v7h-2z" />
+</vector>

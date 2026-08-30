@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GlassesGate</string>
+
+    <!-- Role selection -->
+    <string name="role_prompt">Choose what this phone is for. You can change it any time.</string>
+    <string name="role_user">I\'m wearing the glasses</string>
+    <string name="role_user_detail">Hold a credential on this phone and prove your glasses are present.</string>
+    <string name="role_admin">This phone is the gate</string>
+    <string name="role_admin_detail">Enroll glasses and check who walks up.</string>
+
+    <!-- User: status -->
+    <string name="user_title">Your glasses</string>
+    <string name="status_meta_ai">Meta AI app</string>
+    <string name="status_meta_ai_registered">Connected</string>
+    <string name="status_meta_ai_not_registered">Not connected yet</string>
+    <string name="status_glasses">Glasses</string>
+    <string name="status_glasses_none">None paired with this phone</string>
+    <string name="status_glasses_known_offline">Paired, but not currently reachable</string>
+    <string name="status_beacon">Beacon</string>
+    <string name="status_beacon_live">Broadcasting for %1$s</string>
+    <string name="status_beacon_off">Off</string>
+
+    <string name="action_register">Connect to the Meta AI app</string>
+    <string name="action_unregister">Disconnect from the Meta AI app</string>
+    <string name="user_registration_help">GlassesGate reaches your glasses through the Meta AI app. It only ever asks whether a session is open — it never sees the camera, the microphone, or anything you look at.</string>
+
+    <!-- User: enrollments -->
+    <string name="section_enrollments">Enrollments</string>
+    <string name="user_no_enrollments">None yet. Ask an admin to add your glasses, then scan the code they show you.</string>
+    <string name="action_scan_enrollment">Scan an enrollment code</string>
+    <string name="enrollment_unnamed_gate">Unnamed gate</string>
+    <string name="enrollment_detail">%1$s · serial %2$s</string>
+    <string name="enrollment_no_serial">not recorded</string>
+    <string name="action_forget">Forget</string>
+
+    <!-- User: beacon -->
+    <string name="section_beacon">Beacon</string>
+    <string name="beacon_toggle">Broadcast while my glasses are on</string>
+    <string name="user_beacon_needs_enrollment">Claim an enrollment before you can broadcast.</string>
+    <string name="user_beacon_explainer">The beacon only transmits while your glasses are actually connected. Fold them, take them off, or walk out of range and it stops within seconds.</string>
+
+    <!-- User: claiming a code -->
+    <string name="claim_ok">Enrolled for %1$s.</string>
+    <string name="claim_not_a_code">That isn\'t a GlassesGate enrollment code.</string>
+    <string name="claim_expired">That code has expired. Ask the admin to generate a fresh one.</string>
+    <string name="claim_no_glasses">Connect your glasses in the Meta AI app first, then scan the code again.</string>
+    <string name="claim_ambiguous">More than one pair of glasses is connected. Disconnect the others so the credential binds to the right pair.</string>
+    <string name="claim_already">This phone has already claimed that code.</string>
+
+    <!-- Admin -->
+    <string name="admin_title">Gate</string>
+    <string name="action_add_glasses">Add glasses</string>
+    <string name="action_start_gate">Start gate session</string>
+    <string name="admin_no_credentials">Add at least one pair of glasses before opening the gate.</string>
+    <string name="section_approved">Approved (%1$d)</string>
+    <string name="approved_never_seen">Not seen at this gate yet</string>
+    <string name="approved_serial">Serial %1$s</string>
+    <string name="action_revoke">Revoke</string>
+
+    <string name="enroll_title">Add glasses</string>
+    <string name="enroll_subtitle">Record which pair this is, then show the code to whoever wears them.</string>
+    <string name="field_serial">Serial number</string>
+    <string name="field_serial_help">Printed inside the temple arm. Used to tell pairs apart — it isn\'t what grants access.</string>
+    <string name="field_label">Who these belong to</string>
+    <string name="field_label_help">Shown on the gate screen when they walk up.</string>
+    <string name="field_gate">Gate name</string>
+    <string name="field_gate_help">Optional. Helps the wearer tell one enrollment from another.</string>
+    <string name="action_generate_code">Generate enrollment code</string>
+
+    <string name="code_title">Enrollment code</string>
+    <string name="code_instructions">Have the wearer scan this with GlassesGate while their glasses are connected.</string>
+    <string name="code_warning">Treat this like a key. Until it expires in ten minutes, whoever scans it first gets the credential — including someone photographing it over your shoulder. Revoke and re-issue if you\'re unsure.</string>
+    <string name="code_lost">The code is gone. It\'s deliberately not kept across a rotation. Revoke the entry and issue a new one.</string>
+
+    <!-- Gate screen -->
+    <string name="gate_open">ADMIT</string>
+    <string name="gate_closed">NO PASS</string>
+    <string name="gate_unavailable">GATE OFFLINE</string>
+    <string name="gate_closed_detail">Waiting for an approved pair</string>
+    <string name="gate_recent">Recent</string>
+    <string name="gate_admission_line">%1$s  %2$s</string>
+    <string name="action_end_session">End session</string>
+
+    <!-- Beacon service -->
+    <string name="beacon_notification_title">GlassesGate beacon</string>
+    <string name="beacon_notification_active">Broadcasting for %1$s</string>
+    <string name="beacon_notification_connecting">Connecting to your glasses…</string>
+    <string name="beacon_notification_stopped">Stopped</string>
+    <string name="beacon_channel_name">Beacon</string>
+    <string name="beacon_channel_description">Shown while your glasses are acting as a credential.</string>
+    <string name="action_stop_beacon">Stop</string>
+    <string name="beacon_connecting">Connecting to your glasses…</string>
+    <string name="beacon_paused">Paused — put your glasses back on.</string>
+    <string name="beacon_no_session">Glasses not connected. Not broadcasting.</string>
+    <string name="beacon_wrong_glasses">A different pair of glasses is connected.</string>
+
+    <!-- Permissions and shared actions -->
+    <string name="error_advertise_permission">GlassesGate needs the Nearby devices permission to broadcast.</string>
+    <string name="error_scan_permission">GlassesGate needs the Nearby devices permission to watch for approved glasses.</string>
+    <string name="error_camera_permission">GlassesGate needs the camera to read an enrollment code.</string>
+    <string name="action_grant_permission">Grant permission</string>
+    <string name="action_back">Back</string>
+    <string name="action_done">Done</string>
+    <string name="action_cancel">Cancel</string>
+</resources>

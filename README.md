@@ -1,69 +1,141 @@
 # GlassesGate
 
-GlassesGate turns a pair of Meta AI glasses (Ray-Ban Meta / Ray-Ban Display) into a proximity-based access credential, built on Meta's official **Wearables Device Access Toolkit (DAT)** — currently in developer preview — instead of raw BLE name/MAC scanning.
+Turn a pair of Meta AI glasses into a proximity credential. Built on Meta's official
+[Wearables Device Access Toolkit](https://wearables.developer.meta.com/) (developer preview),
+not on scraping Bluetooth names.
 
-## Why this isn't "scan for nearby glasses"
+Two roles, one app, chosen when you open it:
 
-Meta's glasses don't broadcast an open BLE signal that a third-party phone can scan and identify. Glasses pair to **one** phone through the Meta AI app, and only that phone's app can talk to them through the DAT SDK. There is no public API for an arbitrary device to detect someone else's glasses walking past.
+- **Gate** — an Android phone at a door. Enroll glasses by serial number, then start a session:
+  a full-screen red that turns green while an approved wearer is standing in front of it.
+- **Wearer** — your phone. Claim an enrollment, and your glasses become the thing that opens
+  the gate.
 
-So GlassesGate's actual trust chain is:
+---
+
+## How it works, and why it works that way
+
+The obvious design — the door phone scans for nearby glasses — is impossible. Meta's glasses
+pair to exactly one phone through the Meta AI app, and only that phone can talk to them. There
+is no discovery API for a third device, and no serial-number lookup. Anything claiming otherwise
+is guessing.
+
+So the trust chain runs through the wearer's phone:
 
 ```
-Glasses  <-- Meta AI app / DAT SDK -->  User's phone  --BLE beacon-->  Admin's phone
+glasses ──DAT session──► wearer's phone ──BLE advertisement──► gate phone
 ```
 
-The **User** app confirms it has a live DAT session with a pair of glasses, then broadcasts a short-lived, rotating, HMAC-signed proof over BLE. The **Admin** app scans for that proof and checks it against a locally stored list of approved glasses. The admin device never talks to the glasses directly.
+The wearer's phone broadcasts a rotating, HMAC-signed token — **but only while it holds a live
+session with the exact pair of glasses the credential was issued against.** Fold the glasses,
+take them off, or walk out of range, and the broadcast stops within seconds. That constraint is
+the entire product: it is what makes the glasses the credential rather than the phone.
 
-## Roles (one app, chosen at launch)
+### Enrollment runs gate → wearer
 
-- **User** — registers with the Meta AI app, connects to their glasses via DAT, and once connected can broadcast the approval beacon. Also generates a one-time enrollment QR code for an admin to scan.
-- **Admin** — maintains a local, encrypted, offline list of approved glasses, added by scanning a user's enrollment QR. No cloud, no backend. "Start beacon session" opens a full-screen scanner: **green** while an approved beacon is in range, **red** otherwise.
+1. The admin taps **Add glasses**, types in the serial number printed inside the temple arm, a
+   name, and which gate this is for.
+2. The app mints a random credential id and a 32-byte secret, adds them to the local allowlist,
+   and puts them on screen as a QR code.
+3. The wearer scans it with their glasses connected. The credential binds to that specific pair.
+4. From then on the wearer can broadcast, and this gate — and only this gate — will admit them.
 
-## How the beacon works
+Running enrollment in this direction means the allowlist is authored by the admin. The gate never
+has to trust anything a stranger's phone asserts about itself.
 
-- Each enrolled pair of glasses gets a random 32-byte secret, generated on the user's phone and shared with the admin's phone only via the one-time QR code.
-- The user's phone advertises `HMAC-SHA256(secret, deviceId + timeWindow)` truncated to 8 bytes, rotating every 30 seconds, alongside a 4-byte non-identifying tag so the admin knows which stored secret to check it against. Total payload is 12 bytes, which fits comfortably in a standard BLE advertisement's ~20 usable bytes.
-- The admin's phone recomputes the same HMAC locally for each approved device and compares — no network call, no shared backend. Both the current and previous window are accepted, to tolerate clock drift and scan timing.
-- The scanner runs a watchdog that reverts to red once a full rotation window passes with no fresh match, since `ScanCallback` only fires on a hit and would otherwise leave the gate stuck green after someone walks away.
+The serial number is a **label**, not a key. Meta's SDK gives no way to verify that a serial
+belongs to a particular pair of glasses, so nothing cryptographic rests on it. It exists so a
+human can tell two enrollments apart.
 
-See `core/BeaconProtocol.kt` for the exact scheme and `app/src/test/…/BeaconProtocolTest.kt` for the properties it's expected to hold.
+### The beacon
 
-### Security limitations, stated plainly
+12 bytes of BLE service data:
 
-- This proves **an approved phone with a live glasses session is nearby** — not that the glasses hardware is cryptographically who it claims to be. Meta's public SDK doesn't expose a hardware attestation primitive that would allow the stronger claim.
-- The enrollment QR contains a live credential. Anyone who photographs it can spoof that user's beacon until the secret is rotated (`EnrollmentSecretStore.rotateSecret`).
-- A token is replayable within its ~30–60 second validity window. Shorten `ROTATION_SECONDS` if that matters more than tolerance for clock drift.
-- BLE advertisements are unauthenticated broadcasts; an attacker within radio range can record them. The HMAC is what makes them useless without the secret.
+```
+[0,4)   tag   = SHA-256(credentialId) truncated       — which secret to check against
+[4,12)  token = HMAC-SHA256(secret, credentialId ‖ window) truncated
+```
 
-Treat this as proximity + session verification, appropriate for ticketing and soft access control — not as a replacement for a hardware security key.
+The token rotates every 15 seconds, and the gate accepts one window either side to absorb clock
+skew, so a captured advertisement is useless after at most 45 seconds. The advertiser sleeps
+until the exact window boundary rather than republishing on a timer, so there is always exactly
+one live token.
+
+Nothing identifying is on the wire. Someone recording the radio learns that *a* GlassesGate
+credential went past, not whose.
+
+Both sides are entirely offline. No backend, no accounts, no sync, no analytics. Once enrolled,
+both phones work in airplane mode.
+
+### What this does and doesn't prove
+
+Green means *an approved credential is nearby and its glasses are live*. It does not mean the
+glasses hardware has cryptographically identified itself — Meta's public SDK has no attestation
+primitive to make that claim with.
+
+**[SECURITY.md](SECURITY.md) states the guarantees and the weaknesses in full.** Read it before
+deploying this anywhere that matters. The short version: good for ticketing, events, member
+check-in, and soft access control. Not a replacement for a hardware security key.
+
+---
+
+## Project layout
+
+```
+core/     Pure JVM Kotlin — beacon protocol, enrollment wire format. No Android, no SDK.
+          This is where the security properties live, and where the tests that guard them live.
+app/
+  user/   DAT session wrapper, credential vault, BLE advertiser, foreground service
+  admin/  Allowlist store, BLE scanner
+  ui/     Compose screens, shared view model
+  enrollment/  QR generation and scanning
+```
+
+`core/` is deliberately Android-free. It means `./gradlew :core:test` runs anywhere — no Android
+SDK, no package token, no device — and it is what CI checks on every push.
 
 ## Setup
 
-1. **Wearables Developer Center** — register at [wearables.developer.meta.com](https://wearables.developer.meta.com) to get an `APPLICATION_ID` / `CLIENT_TOKEN` for release builds. For local development, **Developer Mode** works with the placeholder value `0` for both, which is already the default in `gradle.properties`.
-2. **GitHub Packages token** — the DAT SDK is distributed through GitHub Packages, which requires auth even for public read access. Create a classic PAT with the `read:packages` scope, then either `export GITHUB_TOKEN=ghp_...` or add `github_token=ghp_...` to your (gitignored) `local.properties`.
-3. **Gradle wrapper jar** — the binary `gradle/wrapper/gradle-wrapper.jar` isn't checked in. Open the project in Android Studio and let it regenerate the wrapper, or run `gradle wrapper --gradle-version 8.9` once if you have Gradle installed. The properties file pointing at 8.9 is already committed.
-4. Build and run. On first launch as **User**, tap "Register with Meta AI app" — this hands off to the Meta AI app to complete pairing and permission grants.
-5. **Testing without physical glasses** — `mwdat-mockdevice` is wired up as a debug dependency. `MockDeviceKit.pairRaybanMeta()` simulates a connected device, which lets you exercise the whole User → beacon → Admin flow before you have hardware in hand. You'll need two Android devices (or one device plus an emulator with BLE) to test the beacon handoff itself.
+**1. Get a GitHub Packages token.** The DAT SDK is served from GitHub Packages, which needs auth
+even for public reads. Create a classic PAT with the `read:packages` scope, then either:
 
-## Project structure
-
-```
-app/src/main/java/com/glassesgate/app/
-  core/         BeaconProtocol — the rotating-token scheme shared by both roles
-  user/         GlassesSessionManager (DAT wrapper), BeaconAdvertiser, EnrollmentSecretStore
-  admin/        ApprovedDeviceStore (encrypted, local-only), BeaconScanner
-  enrollment/   EnrollmentPayload (QR contents), QR generation + scanning views
-  MainActivity.kt   Role selection and all screens (simple state-based navigation)
-app/src/test/     BeaconProtocol unit tests
+```bash
+export GITHUB_TOKEN=ghp_...
 ```
 
-## Known gaps / next steps
+or add `github_token=ghp_...` to `local.properties` (gitignored).
 
-- `GlassesSessionManager` targets the API shape documented for DAT 0.9 (`Wearables.initialize`, `createSession`, `AutoDeviceSelector`). The SDK is still moving in preview — if a type has been renamed in the version you resolve, that's a rename here, not a redesign.
-- **Verify the device identifier is stable.** The enrollment QR reuses whatever identifier the DAT SDK reports for the connected device. Confirm against the current API reference that it persists across reconnects and reboots before relying on it as a long-term "serial number" — if it rotates, enrollment would need to be redone each session.
-- The beacon only runs while the User screen is in the foreground. A foreground service would be needed for it to keep advertising with the screen off, which is likely what a real ticketing deployment wants.
-- Admin lists are per-device by design (offline). Multi-gate venues would need an export/import step or the cloud sync we deliberately skipped.
-- `local.properties` is currently committed to the repo. It only contains a local SDK path, so it's harmless, but it's in `.gitignore` for a reason — worth a `git rm --cached local.properties`.
+**2. Open in Android Studio and build.** Developer Mode works with the placeholder credentials
+already set in `gradle.properties`. For a release build, replace `MWDAT_APPLICATION_ID` and
+`MWDAT_CLIENT_TOKEN` with the pair issued in the
+[Wearables Developer Center](https://wearables.developer.meta.com) — override them in
+`~/.gradle/gradle.properties` rather than committing real values.
+
+**3. On the wearer's phone**, enable Developer Mode in the Meta AI app (Settings → App Info, tap
+the version five times), then tap **Connect to the Meta AI app** in GlassesGate.
+
+Requires Android 12 (API 31) or later, and a phone that can act as a BLE peripheral — most can,
+but the app checks and says so if yours cannot.
+
+### Testing without glasses
+
+`mwdat-mockdevice` is wired in as a debug dependency. `MockDeviceKit.getInstance(context)` can
+pair a simulated Ray-Ban Meta, which exercises the whole wearer flow. You still need two Android
+devices to test the beacon handoff itself — one phone cannot usefully advertise to and scan from
+itself.
+
+### CI
+
+`:core:test` runs on every push and pull request with no configuration. Building `:app` needs the
+package token, so add your PAT as a repository secret named `MWDAT_PACKAGES_TOKEN` — until you
+do, the Android job is skipped rather than failed.
+
+## Contributing
+
+[AGENTS.md](AGENTS.md) has the working rules, including the ones that exist because a previous
+iteration got them wrong. The most important: never let the beacon advertise without a live
+glasses session, and verify DAT API shapes against the pinned version rather than from memory.
 
 ---
-*Community project, not affiliated with Meta Platforms, Inc.*
+
+*Community project. Not affiliated with Meta Platforms, Inc.*
