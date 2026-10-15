@@ -14,6 +14,11 @@
     <string name="status_meta_ai">Meta AI app</string>
     <string name="status_meta_ai_registered">Connected</string>
     <string name="status_meta_ai_not_registered">Not connected yet</string>
+    <string name="status_meta_ai_needs_permission">Needs the Nearby devices permission first</string>
+    <string name="status_meta_ai_failed">Unavailable: %1$s</string>
+    <string name="glasses_worn">worn</string>
+    <string name="glasses_not_worn">not being worn</string>
+    <string name="glasses_update_needed">needs an update in the Meta AI app</string>
     <string name="status_glasses">Glasses</string>
     <string name="status_glasses_none">None paired with this phone</string>
     <string name="status_glasses_known_offline">Paired, but not currently reachable</string>
@@ -33,12 +38,15 @@
     <string name="enrollment_detail">%1$s · serial %2$s</string>
     <string name="enrollment_no_serial">not recorded</string>
     <string name="action_forget">Forget</string>
+    <string name="forget_title">Forget this enrollment?</string>
+    <string name="forget_body">You won\'t be admitted at %1$s until an admin enrolls your glasses again.</string>
+    <string name="action_scan_again">Scan again</string>
 
     <!-- User: beacon -->
     <string name="section_beacon">Beacon</string>
     <string name="beacon_toggle">Broadcast while my glasses are on</string>
     <string name="user_beacon_needs_enrollment">Claim an enrollment before you can broadcast.</string>
-    <string name="user_beacon_explainer">The beacon only transmits while your glasses are actually connected. Fold them, take them off, or walk out of range and it stops within seconds.</string>
+    <string name="user_beacon_explainer">The beacon only transmits while your glasses are connected and on your face. Take them off, fold them, or walk out of range and it stops within seconds — and starts again by itself when they\'re back.</string>
 
     <!-- User: claiming a code -->
     <string name="claim_ok">Enrolled for %1$s.</string>
@@ -54,24 +62,31 @@
     <string name="action_start_gate">Start gate session</string>
     <string name="admin_no_credentials">Add at least one pair of glasses before opening the gate.</string>
     <string name="section_approved">Approved (%1$d)</string>
-    <string name="approved_never_seen">Not seen at this gate yet</string>
+    <string name="approved_never_seen">Serial %1$s · not seen at this gate yet</string>
     <string name="approved_serial">Serial %1$s</string>
     <string name="action_revoke">Revoke</string>
+    <string name="revoke_title">Revoke access?</string>
+    <string name="revoke_body">%1$s will no longer be admitted here. This can\'t be undone — they\'ll need to be enrolled again.</string>
 
     <string name="enroll_title">Add glasses</string>
     <string name="enroll_subtitle">Record which pair this is, then show the code to whoever wears them.</string>
     <string name="field_serial">Serial number</string>
-    <string name="field_serial_help">Printed inside the temple arm. Used to tell pairs apart — it isn\'t what grants access.</string>
+    <string name="field_serial_help">Printed inside the temple arm. Re-enrolling the same serial later replaces this credential.</string>
+    <string name="field_serial_replaces">Already enrolled here. Continuing revokes the old credential.</string>
     <string name="field_label">Who these belong to</string>
-    <string name="field_label_help">Shown on the gate screen when they walk up.</string>
+    <string name="field_label_help">Optional. Shown on the gate screen when they walk up.</string>
     <string name="field_gate">Gate name</string>
     <string name="field_gate_help">Optional. Helps the wearer tell one enrollment from another.</string>
     <string name="action_generate_code">Generate enrollment code</string>
+    <string name="action_replace_code">Replace and generate a new code</string>
 
     <string name="code_title">Enrollment code</string>
     <string name="code_instructions">Have the wearer scan this with GlassesGate while their glasses are connected.</string>
     <string name="code_warning">Treat this like a key. Until it expires in ten minutes, whoever scans it first gets the credential — including someone photographing it over your shoulder. Revoke and re-issue if you\'re unsure.</string>
-    <string name="code_lost">The code is gone. It\'s deliberately not kept across a rotation. Revoke the entry and issue a new one.</string>
+    <string name="code_lost">The code is gone. It\'s deliberately not kept across a rotation. Enroll the same serial again to issue a fresh one.</string>
+    <string name="code_expired">This code has expired and can no longer be claimed. Enroll the same serial again to issue a fresh one.</string>
+    <string name="code_replaced">This replaced the previous credential for these glasses. The old one no longer works here.</string>
+    <string name="code_countdown">Expires in %1$d:%2$02d</string>
 
     <!-- Gate screen -->
     <string name="gate_open">ADMIT</string>
@@ -86,14 +101,20 @@
     <string name="beacon_notification_title">GlassesGate beacon</string>
     <string name="beacon_notification_active">Broadcasting for %1$s</string>
     <string name="beacon_notification_connecting">Connecting to your glasses…</string>
-    <string name="beacon_notification_stopped">Stopped</string>
     <string name="beacon_channel_name">Beacon</string>
     <string name="beacon_channel_description">Shown while your glasses are acting as a credential.</string>
     <string name="action_stop_beacon">Stop</string>
     <string name="beacon_connecting">Connecting to your glasses…</string>
     <string name="beacon_paused">Paused — put your glasses back on.</string>
-    <string name="beacon_no_session">Glasses not connected. Not broadcasting.</string>
-    <string name="beacon_wrong_glasses">A different pair of glasses is connected.</string>
+    <string name="beacon_no_session">Glasses not nearby. Not broadcasting.</string>
+    <string name="beacon_wrong_glasses">Switching to the glasses this enrollment belongs to…</string>
+    <string name="beacon_not_linked">Session open, waiting for your glasses to link…</string>
+    <string name="beacon_not_worn">Put your glasses on to broadcast.</string>
+    <string name="beacon_starting">Starting the beacon…</string>
+    <string name="beacon_bluetooth_off">Bluetooth is off. Not broadcasting.</string>
+    <string name="beacon_no_enrollment">No enrollment on this phone.</string>
+    <string name="beacon_retrying">Couldn\'t reach your glasses (%1$s). Retrying…</string>
+    <string name="beacon_retrying_generic">no reason given</string>
 
     <!-- Permissions and shared actions -->
     <string name="error_advertise_permission">GlassesGate needs the Nearby devices permission to broadcast.</string>
@@ -103,4 +124,6 @@
     <string name="action_back">Back</string>
     <string name="action_done">Done</string>
     <string name="action_cancel">Cancel</string>
+    <string name="error_glasses_sdk">Couldn\'t start the Meta glasses connection. Check that the Meta AI app is installed and Nearby devices is allowed.</string>
+    <string name="error_start_beacon">Open GlassesGate to start the beacon.</string>
 </resources>

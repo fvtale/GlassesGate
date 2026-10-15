@@ -27,8 +27,11 @@ data class ApprovedCredential(
 ) {
     val shortId: String get() = Credentials.shortId(credentialId)
 
-    /** Precomputed so the scan hot path never hashes. */
-    val tagKey: String by lazy { SecurePrefs.hex(BeaconProtocol.credentialTag(credentialId)) }
+    /** Precomputed so the scan hot path never hashes or allocates. */
+    val tagKey: Int by lazy { BeaconProtocol.tagKey(BeaconProtocol.credentialTag(credentialId)) }
+
+    /** What the gate calls this person when no name was given. */
+    val displayName: String get() = label.ifBlank { serial.ifBlank { shortId } }
 
     /** True until the user has claimed the QR and walked past the gate once. */
     val isUnclaimed: Boolean get() = lastSeenEpochSeconds == null
@@ -69,24 +72,56 @@ class ApprovedCredentialStore(context: Context) {
     private val _credentials = MutableStateFlow(readAll())
     val credentials: StateFlow<List<ApprovedCredential>> = _credentials.asStateFlow()
 
-    fun add(credential: ApprovedCredential) {
-        prefs.edit().putString(key(credential.credentialId), credential.toJson()).apply()
+    /**
+     * Adds [credential], revoking every existing credential for the same serial in the same
+     * write.
+     *
+     * One live credential per pair of glasses is the rule. Re-enrolling a pair is what an admin
+     * does when a wearer loses their phone, and if the old credential survived that, the lost
+     * phone would still open the door. Credentials without a serial are never matched this way.
+     */
+    @Synchronized
+    fun enroll(credential: ApprovedCredential): Int {
+        val replaced = if (credential.serial.isBlank()) {
+            emptyList()
+        } else {
+            readAll().filter { it.serial == credential.serial }
+        }
+        prefs.edit().apply {
+            replaced.forEach { remove(key(it.credentialId)) }
+            putString(key(credential.credentialId), credential.toJson())
+        }.apply()
         _credentials.value = readAll()
+        return replaced.size
     }
 
+    @Synchronized
     fun remove(credential: ApprovedCredential) {
         prefs.edit().remove(key(credential.credentialId)).apply()
         _credentials.value = readAll()
     }
 
     /**
-     * Records that this credential was just admitted. Called off the scan hot path -- once per
-     * arrival, not once per advertisement -- so it never turns a decrypt-and-write into a
-     * per-packet cost.
+     * Records that this credential was just admitted. Called once per arrival rather than once
+     * per advertisement, so it never turns a decrypt-and-write into a per-packet cost.
+     *
+     * Only updates an entry that still exists. The gate works from a snapshot of the list, so a
+     * sighting can land just after the admin revoked that credential -- and writing it back would
+     * quietly un-revoke it.
      */
+    @Synchronized
     fun markSeen(credential: ApprovedCredential, atEpochSeconds: Long) {
-        add(credential.copy(lastSeenEpochSeconds = atEpochSeconds))
+        val key = key(credential.credentialId)
+        if (!prefs.contains(key)) return
+        prefs.edit()
+            .putString(key, credential.copy(lastSeenEpochSeconds = atEpochSeconds).toJson())
+            .apply()
+        _credentials.value = readAll()
     }
+
+    /** Whether a pair with this serial is already enrolled here. */
+    fun isEnrolled(serial: String): Boolean =
+        serial.isNotBlank() && _credentials.value.any { it.serial == serial }
 
     private fun key(credentialId: ByteArray) = KEY_PREFIX + SecurePrefs.hex(credentialId)
 

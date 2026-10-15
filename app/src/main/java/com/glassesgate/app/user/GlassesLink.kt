@@ -1,218 +1,341 @@
 package com.glassesgate.app.user
 
+import android.Manifest
 import android.app.Activity
+import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
+import androidx.core.content.ContextCompat
+import com.glassesgate.core.BeaconPolicy
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.selectors.SpecificDeviceSelector
 import com.meta.wearable.dat.core.session.DeviceSession
 import com.meta.wearable.dat.core.session.DeviceSessionState
+import com.meta.wearable.dat.core.types.Device
+import com.meta.wearable.dat.core.types.DeviceCompatibility
 import com.meta.wearable.dat.core.types.DeviceIdentifier
+import com.meta.wearable.dat.core.types.DonState
 import com.meta.wearable.dat.core.types.LinkState
 import com.meta.wearable.dat.core.types.RegistrationState
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** A pair of glasses this phone knows about, flattened out of the SDK's types. */
 data class GlassesDevice(
     val id: String,
     val name: String,
-    val isConnected: Boolean,
+    /** Null until the SDK has reported this pair's link state at all. */
+    val isLinked: Boolean?,
+    val wear: BeaconPolicy.Wear,
+    /** The glasses or this app need updating before they will work together. */
+    val needsUpdate: Boolean,
 )
 
-/** What the rest of the app knows about the glasses session. */
-sealed interface GlassesState {
-    /** No session. Nothing is being proved, so the beacon must not advertise. */
-    data object Idle : GlassesState
-
-    data object Connecting : GlassesState
-
-    /** A live DAT session with [deviceId]. The only state the beacon may run in. */
-    data class Connected(val deviceId: String) : GlassesState
-
+/** The one session this process may hold, as the beacon policy sees it. */
+data class GlassesSession(
+    val phase: BeaconPolicy.Session,
+    val deviceId: String?,
     /**
-     * The SDK suspended the session -- glasses folded, taken off, or another app took over.
-     * Treated exactly like [Idle] for beacon purposes: the wearer is not demonstrably present.
+     * Counts every failed attempt. Two failures in a row leave [phase] at FAILED both times, and a
+     * StateFlow does not re-emit an equal value -- so without this, a retry that failed again
+     * would be invisible and the beacon would never back off and try a third time.
      */
-    data object Paused : GlassesState
+    val failureCount: Int = 0,
+)
 
-    data class Failed(val message: String) : GlassesState
+sealed interface SdkState {
+    data object NotStarted : SdkState
+
+    /** The SDK must not be initialized before BLUETOOTH_CONNECT is granted. */
+    data object NeedsPermission : SdkState
+
+    data object Ready : SdkState
+
+    data class Failed(val message: String) : SdkState
 }
 
 /**
- * Everything that touches the Meta Wearables Device Access Toolkit lives here.
+ * Everything that touches the Meta Wearables Device Access Toolkit lives here, and AGENTS.md rule 3
+ * is enforced in CI: no other file may import `com.meta.wearable`. The SDK's types are mirrored
+ * into plain Kotlin flows before anything else sees them.
  *
- * DAT types are mirrored into plain Kotlin flows before they reach the rest of the app. The SDK
- * is a developer preview whose shapes move between releases, so this file should be the only one
- * that needs touching when they do.
+ * One instance per process, held by [com.glassesgate.app.GlassesGateApp]. The screen reads it and
+ * the beacon service drives it, so both always agree about what the glasses are doing.
  *
- * GlassesGate asks the SDK for a session and nothing else -- no camera, microphone, or display
+ * GlassesGate asks the SDK for a session and nothing else. No camera, microphone, or display
  * capability is ever attached, so the app never requests a device permission and never sees
- * anything the wearer sees. The existence of a session is the entire signal.
+ * anything the wearer sees.
  */
-class GlassesLink(private val scope: CoroutineScope) {
+class GlassesLink(context: Context) {
+
+    private val appContext = context.applicationContext
+
+    private val failures = CoroutineExceptionHandler { _, error ->
+        // A collector dying must not take the process with it -- the gate role works with no SDK
+        // at all, and a crash loop on the wearer's phone is worse than a message saying why.
+        Log.e(TAG, "DAT collector failed", error)
+        _sdk.value = SdkState.Failed(error.message ?: error.javaClass.simpleName)
+    }
+
+    /**
+     * One thread for every session mutation. Session callbacks, the service's connect requests,
+     * and stop timeouts all touch [activeSession]; serializing them is simpler and more honest
+     * than locking around state that the SDK also mutates behind our back.
+     */
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default.limitedParallelism(1) + failures,
+    )
+
+    private val started = AtomicBoolean(false)
+
+    private val _sdk = MutableStateFlow<SdkState>(SdkState.NotStarted)
+    val sdk: StateFlow<SdkState> = _sdk.asStateFlow()
 
     /**
      * Kept as the SDK's own identifier type, because [SpecificDeviceSelector] needs that value
-     * back. Everything the app sees is the string projection, so nothing downstream has to know
-     * what a `DeviceIdentifier` actually is.
+     * back. Everything else sees the string projection.
      */
     private val identifiers = MutableStateFlow<List<DeviceIdentifier>>(emptyList())
 
     private val _devices = MutableStateFlow<List<GlassesDevice>>(emptyList())
     val devices: StateFlow<List<GlassesDevice>> = _devices.asStateFlow()
 
-    /**
-     * Every pair the SDK reports, whether or not its metadata has arrived yet.
-     *
-     * Enrollment binds against this rather than against [devices], so that a slow or absent
-     * metadata flow cannot make the app look like it has no glasses at all. Binding to a pair
-     * that turns out to be unreachable is harmless: the beacon refuses to advertise without a
-     * live session regardless, so the check that matters still happens at the door.
-     */
-    fun knownDeviceIds(): List<String> = identifiers.value.map { it.toString() }
-
     private val _registered = MutableStateFlow(false)
 
     /** Whether this app is connected to the Meta AI app. Nothing works until this is true. */
     val registered: StateFlow<Boolean> = _registered.asStateFlow()
 
-    private val _state = MutableStateFlow<GlassesState>(GlassesState.Idle)
-    val state: StateFlow<GlassesState> = _state.asStateFlow()
+    private val _session = MutableStateFlow(GlassesSession(BeaconPolicy.Session.NONE, null))
+    val session: StateFlow<GlassesSession> = _session.asStateFlow()
 
-    private var session: DeviceSession? = null
-    private val sessionJobs = mutableListOf<Job>()
-    private val metadataJobs = mutableMapOf<DeviceIdentifier, Job>()
+    private val _lastError = MutableStateFlow<String?>(null)
 
-    init {
+    /** The most recent thing the SDK complained about, for display. Cleared on a good start. */
+    val lastError: StateFlow<String?> = _lastError.asStateFlow()
+
+    private var activeSession: DeviceSession? = null
+    private var sessionObservers: CoroutineScope? = null
+
+    /**
+     * Initializes the SDK and starts observing it, if the Bluetooth permission is held. Safe to
+     * call repeatedly; returns whether the SDK is ready.
+     *
+     * Call from the main thread: Meta's samples initialize there, and it is cheap.
+     */
+    fun start(): Boolean {
+        if (!hasConnectPermission()) {
+            _sdk.value = SdkState.NeedsPermission
+            return false
+        }
+        if (!started.compareAndSet(false, true)) return _sdk.value == SdkState.Ready
+
+        var failure: String? = null
+        Wearables.initialize(appContext).onFailure { error, _ -> failure = error.description }
+        failure?.let { message ->
+            Log.e(TAG, "DAT failed to initialize: $message")
+            _sdk.value = SdkState.Failed(message)
+            started.set(false) // Allow a later attempt, e.g. after the Meta AI app is installed.
+            return false
+        }
+
+        _sdk.value = SdkState.Ready
         scope.launch {
             Wearables.registrationState.collect { registration ->
                 _registered.value = registration == RegistrationState.REGISTERED
             }
         }
-        scope.launch {
-            Wearables.devices.collect { ids ->
-                identifiers.value = ids.toList()
-                syncMetadata(ids)
-            }
-        }
+        scope.launch { observeDevices() }
+        return true
     }
 
-    fun startRegistration(activity: Activity) = Wearables.startRegistration(activity)
+    fun startRegistration(activity: Activity) {
+        if (start()) Wearables.startRegistration(activity)
+    }
 
-    fun startUnregistration(activity: Activity) = Wearables.startUnregistration(activity)
+    fun startUnregistration(activity: Activity) {
+        if (start()) Wearables.startUnregistration(activity)
+    }
 
+    /** Every pair the SDK reports, whether or not its metadata has arrived. */
+    fun knownDeviceIds(): List<String> = identifiers.value.map { it.toString() }
 
-    /**
-     * Opens a session with [deviceId]. Resolving the selector against the live identifier list,
-     * rather than reconstructing one from the stored string, keeps this correct whatever the
-     * SDK's identifier type turns out to be.
-     */
+    /** Opens a session on [deviceId] unless one is already open. Never blocks the caller. */
     fun connect(deviceId: String) {
-        val current = _state.value
-        if (current is GlassesState.Connected || current is GlassesState.Connecting) return
+        scope.launch { openSession(deviceId) }
+    }
+
+    /** Asks the SDK to end the session, and stops waiting for it after a few seconds. */
+    fun disconnect() {
+        scope.launch { closeSession() }
+    }
+
+    private fun openSession(deviceId: String) {
+        if (_sdk.value != SdkState.Ready || activeSession != null) return
 
         val match = identifiers.value.firstOrNull { it.toString() == deviceId }
         if (match == null) {
-            _state.value = GlassesState.Failed("Those glasses are not connected to this phone.")
+            fail("Those glasses are not paired with this phone.")
             return
         }
 
-        _state.value = GlassesState.Connecting
+        setSession(BeaconPolicy.Session.STARTING, deviceId)
         Wearables.createSession(SpecificDeviceSelector(match)).fold(
             onSuccess = { created ->
-                session = created
+                activeSession = created
                 // Observe before start(), so no initial transition is missed.
                 observe(created, deviceId)
                 created.start()
             },
             onFailure = { error, _ ->
                 Log.e(TAG, "createSession failed: ${error.description}")
-                _state.value = GlassesState.Failed(error.description)
+                fail(error.description)
             },
         )
     }
 
-    fun disconnect() {
-        session?.stop()
-        clearSession()
-        _state.value = GlassesState.Idle
+    private suspend fun closeSession() {
+        val closing = activeSession ?: return
+        if (_session.value.phase == BeaconPolicy.Session.STOPPING) return
+
+        _session.value = _session.value.copy(phase = BeaconPolicy.Session.STOPPING)
+        closing.stop()
+
+        // STOPPED normally arrives through the state collector. If it never does, a session
+        // wedged in STOPPING would block every reconnect forever, so give up on it.
+        delay(STOP_TIMEOUT_MILLIS)
+        if (activeSession === closing) {
+            Log.w(TAG, "session did not report STOPPED; releasing it")
+            release()
+            setSession(BeaconPolicy.Session.NONE, null)
+        }
     }
 
-    private fun observe(session: DeviceSession, requestedDeviceId: String) {
-        sessionJobs += scope.launch {
-            session.state.collect { sessionState ->
-                _state.value = when (sessionState) {
-                    DeviceSessionState.STARTED -> GlassesState.Connected(requestedDeviceId)
-                    DeviceSessionState.STARTING -> GlassesState.Connecting
-                    DeviceSessionState.PAUSED -> GlassesState.Paused
-                    DeviceSessionState.STOPPED -> {
-                        clearSession()
-                        GlassesState.Idle
-                    }
-                    // STOPPING, IDLE, and anything a later SDK adds: hold the last known state
-                    // rather than inventing a transition the UI would flicker through.
-                    else -> _state.value
-                }
-            }
+    private fun observe(session: DeviceSession, deviceId: String) {
+        val observers = CoroutineScope(scope.coroutineContext + Job(scope.coroutineContext[Job]))
+        sessionObservers = observers
+        observers.launch {
+            session.state.collect { state -> onSessionState(session, state, deviceId) }
         }
-        sessionJobs += scope.launch {
+        observers.launch {
+            // Errors are reported, not acted on. Most are informational, and the terminal ones
+            // are followed by the session stopping, which the state collector handles. Treating
+            // every error as a failure used to kill a beacon whose session was still healthy.
             session.errors.collect { error ->
-                Log.e(TAG, "session error: ${error.description}")
-                _state.value = GlassesState.Failed(error.description)
+                Log.w(TAG, "session error: ${error.description}")
+                _lastError.value = error.description
             }
         }
     }
 
-    private fun clearSession() {
-        sessionJobs.forEach { it.cancel() }
-        sessionJobs.clear()
-        session = null
+    private fun onSessionState(session: DeviceSession, state: DeviceSessionState, deviceId: String) {
+        if (session !== activeSession) return
+        val phase = when (state) {
+            DeviceSessionState.STARTED -> BeaconPolicy.Session.STARTED
+            DeviceSessionState.PAUSED -> BeaconPolicy.Session.PAUSED
+            DeviceSessionState.STOPPING -> BeaconPolicy.Session.STOPPING
+            DeviceSessionState.STOPPED -> {
+                // Terminal: a stopped session never restarts. The policy will ask for a new one.
+                release()
+                BeaconPolicy.Session.NONE
+            }
+            // IDLE, STARTING, and any state a later SDK adds. Fail closed: an unrecognised state
+            // is treated as not live, never as live.
+            else -> BeaconPolicy.Session.STARTING
+        }
+        if (phase == BeaconPolicy.Session.STARTED) _lastError.value = null
+        setSession(phase, if (phase == BeaconPolicy.Session.NONE) null else deviceId)
+    }
+
+    private fun setSession(phase: BeaconPolicy.Session, deviceId: String?) {
+        _session.value = GlassesSession(phase, deviceId, _session.value.failureCount)
+    }
+
+    private fun fail(message: String) {
+        _lastError.value = message
+        _session.value = GlassesSession(
+            BeaconPolicy.Session.FAILED,
+            deviceId = null,
+            failureCount = _session.value.failureCount + 1,
+        )
+    }
+
+    private fun release() {
+        sessionObservers?.cancel()
+        sessionObservers = null
+        activeSession = null
     }
 
     /**
-     * One metadata collector per device, started and stopped as devices appear and disappear.
-     * Metadata is where the human-readable name and the actual connection state live --
-     * `Wearables.devices` alone includes pairs that are merely remembered.
+     * Follows every paired device's metadata, which is where the name, the real link state, and
+     * the wear state live. `Wearables.devices` on its own includes pairs that are merely
+     * remembered. Combined rather than collected one by one, so a device appearing or vanishing
+     * restarts the whole set cleanly.
      */
-    private fun syncMetadata(ids: Set<DeviceIdentifier>) {
-        (metadataJobs.keys - ids).forEach { gone ->
-            metadataJobs.remove(gone)?.cancel()
-            _devices.update { list -> list.filterNot { it.id == gone.toString() } }
-        }
-
-        // Placeholder rows so the list is never empty while metadata is still in flight; the
-        // collector below replaces each one as soon as real metadata arrives.
-        _devices.update { list ->
-            val known = list.associateBy { it.id }
-            ids.map { id ->
-                known[id.toString()]
-                    ?: GlassesDevice(id.toString(), DEFAULT_DEVICE_NAME, isConnected = false)
+    private suspend fun observeDevices() {
+        Wearables.devices.collectLatest { ids ->
+            val list = ids.toList()
+            identifiers.value = list
+            if (list.isEmpty()) {
+                _devices.value = emptyList()
+                return@collectLatest
             }
-        }
 
-        (ids - metadataJobs.keys).forEach { id ->
-            metadataJobs[id] = scope.launch {
-                Wearables.devicesMetadata[id]?.collect { device ->
-                    val entry = GlassesDevice(
-                        id = id.toString(),
-                        name = device.name.ifEmpty { DEFAULT_DEVICE_NAME },
-                        isConnected = device.linkState == LinkState.CONNECTED,
-                    )
-                    _devices.update { list ->
-                        list.filterNot { it.id == entry.id } + entry
-                    }
-                }
+            // Keep what is already known while the new set's metadata arrives, so the screen
+            // does not flash "unknown" every time a pair is added.
+            val previous = _devices.value.associateBy { it.id }
+            _devices.value = list.map { previous[it.toString()] ?: unreported(it.toString()) }
+
+            val readings = list.map { id ->
+                val key = id.toString()
+                Wearables.devicesMetadata[id]?.map { describe(key, it) } ?: flowOf(unreported(key))
             }
+            combine(readings) { it.toList() }.collect { _devices.value = it }
         }
     }
+
+    private fun describe(id: String, device: Device) = GlassesDevice(
+        id = id,
+        // The SDK leaves the name empty until the pair has described itself.
+        name = device.name.ifBlank { DEFAULT_DEVICE_NAME },
+        isLinked = device.linkState == LinkState.CONNECTED,
+        wear = when (device.donState) {
+            DonState.DONNED -> BeaconPolicy.Wear.WORN
+            DonState.DOFFED -> BeaconPolicy.Wear.NOT_WORN
+            else -> BeaconPolicy.Wear.UNKNOWN
+        },
+        needsUpdate = device.compatibility == DeviceCompatibility.DEVICE_UPDATE_REQUIRED ||
+            device.compatibility == DeviceCompatibility.SDK_UPDATE_REQUIRED,
+    )
+
+    private fun unreported(id: String) = GlassesDevice(
+        id = id,
+        name = DEFAULT_DEVICE_NAME,
+        isLinked = null,
+        wear = BeaconPolicy.Wear.UNKNOWN,
+        needsUpdate = false,
+    )
+
+    private fun hasConnectPermission() =
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) ==
+            PackageManager.PERMISSION_GRANTED
 
     private companion object {
         const val TAG = "GlassesLink"
         const val DEFAULT_DEVICE_NAME = "Meta glasses"
+        const val STOP_TIMEOUT_MILLIS = 5_000L
     }
 }

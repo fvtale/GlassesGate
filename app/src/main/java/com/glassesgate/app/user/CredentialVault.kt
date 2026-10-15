@@ -25,8 +25,13 @@ class CredentialVault(context: Context) {
     private val _activeId = MutableStateFlow(readActiveId())
     val activeId: StateFlow<String?> = _activeId.asStateFlow()
 
-    val active: BoundCredential?
-        get() = _credentials.value.firstOrNull { it.shortId == _activeId.value }
+    private val _active = MutableStateFlow(resolveActive())
+
+    /**
+     * The credential the beacon should be advertising, observable so the service follows a
+     * switch or a removal the moment it happens rather than broadcasting a stale one.
+     */
+    val active: StateFlow<BoundCredential?> = _active.asStateFlow()
 
     fun save(credential: BoundCredential) {
         prefs.edit()
@@ -53,10 +58,17 @@ class CredentialVault(context: Context) {
         refresh()
     }
 
+    // Synchronized because the screen writes on the main thread while the beacon service reads
+    // from its own; the three flows must change together or a reader can see a half-update.
+    @Synchronized
     private fun refresh() {
         _credentials.value = readAll()
         _activeId.value = readActiveId()
+        _active.value = resolveActive()
     }
+
+    private fun resolveActive(): BoundCredential? =
+        _credentials.value.firstOrNull { it.shortId == _activeId.value }
 
     private fun readActiveId(): String? {
         val stored = prefs.getString(KEY_ACTIVE, null)

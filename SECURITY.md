@@ -8,7 +8,7 @@ When the gate shows green, this is what has been established:
 
 > A phone that holds a credential this gate issued is within Bluetooth range, **and** that phone
 > currently has a live Meta Wearables session open with the specific pair of glasses the
-> credential was bound to.
+> credential was bound to, **and** the SDK reports that pair as linked and not taken off.
 
 That is a genuine, useful claim. It is not the same as "these glasses are cryptographically who
 they say they are", and the difference matters.
@@ -32,8 +32,14 @@ running on a rooted phone, could advertise without one.
 ## What the design does buy you
 
 - **Presence is required, not just possession.** The beacon stops within seconds when the glasses
-  are folded, removed, powered off, or out of range. Handing your phone to a friend does not hand
-  over your credential unless you hand over the glasses too.
+  are folded, taken off, powered off, or out of range. Handing your phone to a friend does not hand
+  over your credential unless you hand over the glasses too. The rule is a pure function in
+  `core/BeaconPolicy.kt`, and `BeaconPolicyTest` checks every combination of its inputs.
+- **"Taken off" means reported as taken off.** The SDK can also answer *unknown*, which it does
+  while its control channel warms up. Unknown is allowed through, because requiring a positive
+  "worn" would leave the beacon dead on any pair whose wear sensor never reports. This is the one
+  place the policy chooses availability over strictness; tightening it is a one-line change in
+  `BeaconPolicy.decideBound` if your deployment wants it.
 - **Replay is bounded.** Tokens rotate every 15 seconds and are accepted one window either side,
   so a captured advertisement is useless after at most 45 seconds. `BeaconProtocolTest` asserts
   this ceiling; if the constants change, that test fails.
@@ -45,12 +51,19 @@ running on a rooted phone, could advertise without one.
 - **Secrets are encrypted at rest** via `EncryptedSharedPreferences` with a keystore-backed master
   key, and backup and device-transfer are both disabled so a credential cannot be restored onto a
   second phone.
+- **One credential per pair.** Enrolling a serial again revokes that serial's previous credential
+  in the same write, so recovering from a lost phone also locks the lost phone out.
+- **Revocation sticks.** The gate checks against a snapshot of the allowlist, so a sighting can
+  land just after a revoke. Recording that sighting is refused for an entry that no longer
+  exists, rather than writing the revoked credential back.
 
 ## Known weaknesses, stated plainly
 
 **The enrollment QR is a bearer credential.** For the ten minutes it is valid, whoever scans it
-first gets the credential — including someone photographing it over the admin's shoulder. It
-expires, and it can be revoked, but while it is on screen it is a key on a screen.
+first gets the credential — including someone photographing it over the admin's shoulder. The
+screen showing it blocks screenshots and screen recording, counts down, and clears itself at
+expiry, but none of that stops a second phone's camera. While it is on screen it is a key on a
+screen.
 
 **A relay attack works.** Two attackers, one near the wearer and one near the gate, forwarding
 advertisements between them, will open the gate. The protocol has no distance bounding, and BLE
@@ -63,9 +76,11 @@ access, or a modified build of this app, defeats the session requirement.
 **Revocation is per-gate and takes effect only on that device.** There is no broadcast revocation
 because there is no server. Revoking at the front door does not revoke at the loading dock.
 
-**The serial number is not verified.** The admin types it in and it is stored as a label. Meta's
-SDK gives no way to confirm a serial belongs to the glasses in question. It exists so a human can
-tell two enrollments apart, and nothing else depends on it.
+**The serial number is not verified.** The admin types it in. Meta's SDK gives no way to confirm a
+serial belongs to the glasses in question, so a wrong serial is simply a wrong label — and,
+because re-enrolling a serial revokes the old credential, a mistyped serial means the replacement
+does not replace anything. The gate screen shows the serial on admission so staff can check it
+against the glasses on the person's face, which is the one check the radio cannot make.
 
 **No rate limiting on the gate.** An attacker in radio range can replay a captured token as often
 as they like within its window.

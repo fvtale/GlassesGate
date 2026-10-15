@@ -17,8 +17,8 @@ android {
         // permission set plus ACCESS_FINE_LOCATION, on phones too old to be worth supporting.
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.2.0"
+        versionCode = 2
+        versionName = "0.3.0"
 
         // 0/0 is the Developer Mode placeholder; see gradle.properties.
         manifestPlaceholders["mwdatApplicationId"] =

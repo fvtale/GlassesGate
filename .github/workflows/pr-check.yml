@@ -26,6 +26,18 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
+      # AGENTS.md rule 3, checked rather than trusted: the DAT SDK is a moving target, and
+      # keeping it to one file is what makes an upgrade a one-file change.
+      - name: DAT imports stay in GlassesLink.kt
+        run: |
+          offenders=$(grep -rl --include='*.kt' 'import com.meta.wearable' app/src \
+            | grep -v 'app/src/main/java/com/glassesgate/app/user/GlassesLink.kt' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::com.meta.wearable imported outside GlassesLink.kt:"
+            echo "$offenders"
+            exit 1
+          fi
+
       - run: ./gradlew :core:test --stacktrace
 
       - uses: actions/upload-artifact@v7

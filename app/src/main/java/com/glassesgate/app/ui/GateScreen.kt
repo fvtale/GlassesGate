@@ -83,9 +83,7 @@ fun GateScreen(model: AppViewModel, onExit: () -> Unit) {
                 Spacer(Modifier.height(16.dp))
                 Text(
                     text = when (val current = state) {
-                        is GateState.Open -> current.credential.label.ifEmpty {
-                            current.credential.shortId
-                        }
+                        is GateState.Open -> current.credential.displayName
                         is GateState.Closed -> stringResource(R.string.gate_closed_detail)
                         is GateState.Unavailable -> current.reason
                     },
@@ -93,6 +91,17 @@ fun GateScreen(model: AppViewModel, onExit: () -> Unit) {
                     style = MaterialTheme.typography.headlineSmall,
                     textAlign = TextAlign.Center,
                 )
+                // The serial lets whoever is on the door check the glasses on the face match the
+                // glasses that were enrolled -- the one thing the radio cannot confirm for them.
+                val open = state as? GateState.Open
+                if (open != null && open.credential.serial.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.approved_serial, open.credential.serial),
+                        color = GateColors.OnGate,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
             }
         }
 

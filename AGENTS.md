@@ -25,7 +25,7 @@ the reason this app exists. Do not make it.
 
 | Path | What it is |
 |------|------------|
-| `core/` | Pure JVM Kotlin. Beacon protocol and enrollment wire format. No Android, no DAT. |
+| `core/` | Pure JVM Kotlin. Beacon protocol, enrollment wire format, and `BeaconPolicy` (when the beacon may transmit). No Android, no DAT. |
 | `app/` | The Android app. Both roles, chosen at launch. |
 | `app/src/main/java/.../user/` | Wearer role: DAT link, credential vault, advertiser, foreground service. |
 | `app/src/main/java/.../admin/` | Gate role: allowlist store and BLE scanner. |
@@ -34,19 +34,32 @@ the reason this app exists. Do not make it.
 ## Rules
 
 **1. Security claims live in `core/` and are enforced by its tests.**
-`BeaconProtocolTest` asserts things like "the replay window stays under a minute" and "a genuine
-tag with a foreign token is rejected". If you change `ROTATION_SECONDS`, `DRIFT_WINDOWS`, or the
-matching logic, you are changing a claim made in `README.md` and `SECURITY.md`. Update all three
-together or do not touch it.
+`BeaconProtocolTest` asserts things like "the replay window stays under a minute", "a genuine
+tag with a foreign token is rejected", and "the advertisement fits in 31 bytes".
+`BeaconPolicyTest` walks every combination of beacon inputs and asserts the beacon never transmits
+without a live, linked, not-doffed session on the bound pair. If you change `ROTATION_SECONDS`,
+`DRIFT_WINDOWS`, the matching logic, or the policy, you are changing a claim made in `README.md`
+and `SECURITY.md`. Update all three together or do not touch it.
 
-**2. Never widen what the beacon proves.**
+**The Android service must not decide when to transmit.** `BeaconService` feeds observations to
+`BeaconPolicy.decide` and does what it returns. A condition added to the service instead of the
+policy is a condition no test sees.
+
+**2. Never widen what the beacon proves — or what it sends.**
 The advertisement carries a tag and a token, nothing else. Do not add the serial number, the
 wearer's name, the device identifier, or anything else identifying to the payload. It is an
 unauthenticated broadcast that anyone in radio range can record.
 
+There is also no room. The advertisement is one *Service Data – 128-bit UUID* structure: 30 of the
+31 bytes legacy BLE allows. Adding the service-UUID list, flags (by making it connectable), a
+name, or TX power will make Android reject it with `ADVERTISE_FAILED_DATA_TOO_LARGE`. That is not
+hypothetical — an earlier version sent the UUID list and never transmitted once.
+
 **3. `GlassesLink.kt` is the only file that may import `com.meta.wearable.*`.**
-The DAT SDK is a developer preview and its type shapes move between releases. Everything else
-consumes plain Kotlin flows. Keeping that boundary means an SDK upgrade is one file to fix.
+CI enforces this. The SDK's type shapes have moved between releases; everything else consumes
+plain Kotlin flows, so an SDK upgrade is one file to fix. That includes `Wearables.initialize` —
+it is called from `GlassesLink.start()`, only once `BLUETOOTH_CONNECT` is granted, as Meta's
+samples do. Never call it from `Application.onCreate`.
 
 **4. Verify DAT API shapes against the pinned version. Do not write them from memory.**
 The version is in `gradle/libs.versions.toml`. Meta publishes an agent knowledge base and a docs
@@ -57,10 +70,18 @@ claude plugin marketplace add facebook/meta-wearables-dat-android
 claude plugin install mwdat-android@mwdat-android-marketplace
 ```
 
-The sample apps under `samples/` in that repository are the ground truth for call sequences. A
+The sample apps under `samples/` in that repository are the ground truth for call sequences —
+`BirdSpotter`'s `DatGlassesSessionRepository.kt` especially, for link and wear state. A
 previous iteration of this codebase shipped `session.device.identifier`, which does not exist,
 and `Result.fold` with the wrong arity — both from guessing. The SDK uses its own result type
 whose failure callback takes `(error, throwable)`.
+
+Two SDK facts this app depends on, both easy to get wrong:
+
+- **`DeviceSessionState.STARTED` does not mean the glasses are reachable.** Check the device's
+  `linkState` from `Wearables.devicesMetadata` as well. The policy requires both.
+- **Unrecognised session states fail closed.** `GlassesLink` maps any state it does not know to
+  not-live. Keep it that way when the SDK adds one.
 
 **5. Nothing leaves the device.**
 No analytics, no crash reporting, no sync, no telemetry. The manifest opts out of both SDK data

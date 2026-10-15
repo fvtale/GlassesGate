@@ -26,10 +26,19 @@ So the trust chain runs through the wearer's phone:
 glasses ──DAT session──► wearer's phone ──BLE advertisement──► gate phone
 ```
 
-The wearer's phone broadcasts a rotating, HMAC-signed token — **but only while it holds a live
-session with the exact pair of glasses the credential was issued against.** Fold the glasses,
-take them off, or walk out of range, and the broadcast stops within seconds. That constraint is
-the entire product: it is what makes the glasses the credential rather than the phone.
+The wearer's phone broadcasts a rotating, HMAC-signed token, but only while three things are
+true at once:
+
+1. it holds a live DAT session with **the exact pair** the credential was issued against;
+2. the SDK reports that pair as **actually linked** — Meta's own reference code warns that a
+   started session does not by itself mean the glasses are reachable;
+3. the glasses are **not reported as taken off.** DAT 1.0 exposes wear state, so glasses folded
+   on a table next to the phone do not count.
+
+Take them off, fold them, or walk out of range, and the broadcast stops within seconds; put them
+back on and it resumes by itself. That rule is the entire product — it is what makes the glasses
+the credential rather than the phone — so it lives in `core/BeaconPolicy.kt` as a pure function,
+and its test walks all 1,728 combinations of inputs to prove it never transmits otherwise.
 
 ### Enrollment runs gate → wearer
 
@@ -43,23 +52,34 @@ the entire product: it is what makes the glasses the credential rather than the 
 Running enrollment in this direction means the allowlist is authored by the admin. The gate never
 has to trust anything a stranger's phone asserts about itself.
 
-The serial number is a **label**, not a key. Meta's SDK gives no way to verify that a serial
-belongs to a particular pair of glasses, so nothing cryptographic rests on it. It exists so a
-human can tell two enrollments apart.
+The serial number is required, but it is not a key. Meta's SDK gives no way to verify that a
+serial belongs to a particular pair, so nothing cryptographic rests on it. What it does do is
+make recovery work: **enrolling the same serial again revokes the old credential** in the same
+step. When a wearer loses their phone, the admin re-enrolls their glasses and the lost phone stops
+opening the door.
+
+The enrollment QR is a live credential for its ten minutes, so the screen showing it blocks
+screenshots, screen recording, and the recent-apps thumbnail, counts down, and removes the code
+when it expires.
 
 ### The beacon
 
-12 bytes of BLE service data:
+One BLE AD structure, *Service Data – 128-bit UUID*, carrying 12 bytes:
 
 ```
 [0,4)   tag   = SHA-256(credentialId) truncated       — which secret to check against
 [4,12)  token = HMAC-SHA256(secret, credentialId ‖ window) truncated
 ```
 
+With its 2-byte header and the 16-byte UUID, that is 30 of the 31 bytes a legacy advertisement
+allows. Nothing else is sent — not the UUID list, not flags, not a device name — because nothing
+else fits. (An earlier version also sent the UUID list, came to 48 bytes, and was rejected by
+Android every time. `BeaconProtocolTest` now pins the real arithmetic.)
+
 The token rotates every 15 seconds, and the gate accepts one window either side to absorb clock
-skew, so a captured advertisement is useless after at most 45 seconds. The advertiser sleeps
-until the exact window boundary rather than republishing on a timer, so there is always exactly
-one live token.
+skew, so a captured advertisement is useless after at most 45 seconds. The advertiser uses an
+`AdvertisingSet` and swaps the token in place at the exact window boundary, so there is never a
+gap on the air and never more than one live token.
 
 Nothing identifying is on the wire. Someone recording the radio learns that *a* GlassesGate
 credential went past, not whose.
@@ -82,14 +102,24 @@ check-in, and soft access control. Not a replacement for a hardware security key
 ## Project layout
 
 ```
-core/     Pure JVM Kotlin — beacon protocol, enrollment wire format. No Android, no SDK.
-          This is where the security properties live, and where the tests that guard them live.
+core/     Pure JVM Kotlin — beacon protocol, enrollment wire format, and the beacon policy
+          (when to transmit). No Android, no SDK. The security properties live here, and so do
+          the tests that guard them.
 app/
-  user/   DAT session wrapper, credential vault, BLE advertiser, foreground service
+  user/   DAT session wrapper (the only file allowed to touch the SDK), credential vault,
+          BLE advertiser, foreground service
   admin/  Allowlist store, BLE scanner
   ui/     Compose screens, shared view model
   enrollment/  QR generation and scanning
 ```
+
+### The gate, in practice
+
+The gate keeps its screen on for the whole session and matches advertisements in software rather
+than with a hardware scan filter, which behaves identically on every phone's Bluetooth chip. It
+restarts its scan every twenty minutes, because Android quietly downgrades a scan that runs for
+half an hour to a mode that barely hears anything. If Bluetooth is switched off it says so in
+grey, rather than showing a red "no pass" to someone holding a perfectly good credential.
 
 `core/` is deliberately Android-free. It means `./gradlew :core:test` runs anywhere — no Android
 SDK, no package token, no device — and it is what CI checks on every push.

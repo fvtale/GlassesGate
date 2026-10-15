@@ -4,11 +4,13 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,6 +25,7 @@ import com.glassesgate.app.ui.AdminShowCodeScreen
 import com.glassesgate.app.ui.AppViewModel
 import com.glassesgate.app.ui.GateScreen
 import com.glassesgate.app.ui.GlassesGateTheme
+import com.glassesgate.app.ui.IssuedEnrollment
 import com.glassesgate.app.ui.RoleSelectScreen
 import com.glassesgate.app.ui.UserClaimScreen
 import com.glassesgate.app.ui.UserHomeScreen
@@ -55,7 +58,22 @@ class MainActivity : ComponentActivity() {
 
                 // A payload lives only as long as it is on screen; it is a live credential and
                 // has no business surviving into saved instance state.
-                var pendingCode by remember { mutableStateOf<String?>(null) }
+                var pendingCode by remember { mutableStateOf<IssuedEnrollment?>(null) }
+
+                // The SDK is initialized only once BLUETOOTH_CONNECT is held, as Meta's samples
+                // do -- and it is re-checked whenever a permission dialog returns.
+                val canConnect = granted(Manifest.permission.BLUETOOTH_CONNECT)
+                LaunchedEffect(canConnect, current) {
+                    if (canConnect && current.isWearer) model.link.start()
+                }
+
+                // System back moves up a level instead of leaving the app from a sub-screen --
+                // most importantly from the gate, where a stray tap would otherwise end the
+                // session and drop the admin out of GlassesGate entirely.
+                BackHandler(enabled = current.parent != null) {
+                    if (current == Screen.AdminShowCode) pendingCode = null
+                    current.parent?.let { screen = it.name }
+                }
 
                 Surface(modifier = Modifier.fillMaxSize()) {
                     when (current) {
@@ -97,15 +115,15 @@ class MainActivity : ComponentActivity() {
 
                         Screen.AdminEnroll -> AdminEnrollScreen(
                             model = model,
-                            onIssued = { encoded ->
-                                pendingCode = encoded
+                            onIssued = { issued ->
+                                pendingCode = issued
                                 screen = Screen.AdminShowCode.name
                             },
                             onCancel = { screen = Screen.Admin.name },
                         )
 
                         Screen.AdminShowCode -> AdminShowCodeScreen(
-                            encoded = pendingCode,
+                            issued = pendingCode,
                             onDone = {
                                 pendingCode = null
                                 screen = Screen.Admin.name
@@ -151,13 +169,17 @@ class MainActivity : ComponentActivity() {
     /** The gate only ever listens. It has no reason to hold the camera or advertise. */
     private fun adminPermissions() = arrayOf(Manifest.permission.BLUETOOTH_SCAN)
 
-    private enum class Screen {
-        RoleSelect,
-        User,
-        UserClaim,
-        Admin,
-        AdminEnroll,
-        AdminShowCode,
-        Gate,
+    /**
+     * [parent] is where system back goes. [isWearer] marks the screens that need the DAT SDK; the
+     * gate role never initializes it, since a door phone has no glasses and no Meta AI app.
+     */
+    private enum class Screen(val parent: Screen?, val isWearer: Boolean) {
+        RoleSelect(null, false),
+        User(RoleSelect, true),
+        UserClaim(User, true),
+        Admin(RoleSelect, false),
+        AdminEnroll(Admin, false),
+        AdminShowCode(Admin, false),
+        Gate(Admin, false),
     }
 }
