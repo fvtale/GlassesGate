@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION") // androidx.security.crypto; see SecurePrefs
+
 package com.glassesgate.app.data
 
 import android.content.Context
@@ -20,7 +22,6 @@ import androidx.security.crypto.MasterKey
  * still works, it is still the least-bad option for a project this size, and the day it stops
  * being that is the day this comment should send someone here.
  */
-@Suppress("DEPRECATION")
 internal object SecurePrefs {
 
     fun open(context: Context, name: String): SharedPreferences =
