@@ -61,15 +61,52 @@ object BeaconProtocol {
     const val CREDENTIAL_ID_BYTES = 16
     const val SECRET_BYTES = 32
 
+    /** Four bytes, so a tag also fits in an `Int` -- see [tagKey]. */
     const val TAG_BYTES = 4
 
-    /**
-     * Bytes of HMAC actually transmitted. 4 + 8 = 12 bytes of service data fits comfortably in
-     * the ~20 usable bytes of a legacy BLE advertisement, which is the floor we design for.
-     */
+    /** Bytes of HMAC actually transmitted. */
     const val TOKEN_BYTES = 8
 
     const val PAYLOAD_BYTES = TAG_BYTES + TOKEN_BYTES
+
+    // ---- What goes on the air ----
+    //
+    // A legacy BLE advertisement carries at most 31 bytes, as a run of AD structures that each
+    // spend one length byte and one type byte before their data. The advertiser sends exactly one
+    // structure, "Service Data - 128-bit UUID", and nothing else. That leaves one byte spare --
+    // which is why the arithmetic is pinned down here and asserted in the tests, rather than left
+    // to whoever next adds "just the UUID list" or "just the flags" and silently gets
+    // ADVERTISE_FAILED_DATA_TOO_LARGE on every phone.
+
+    /** The legacy (BLE 4.x) advertising payload limit. Every phone can receive this. */
+    const val LEGACY_ADVERTISING_BYTES = 31
+
+    /** Length byte plus AD type byte, spent by every AD structure. */
+    const val AD_STRUCTURE_HEADER_BYTES = 2
+
+    const val UUID_128_BYTES = 16
+
+    /**
+     * The flags structure Android adds to *connectable* advertisements. The beacon is not
+     * connectable, so it is not sent -- and it would not fit if it were.
+     */
+    const val FLAGS_STRUCTURE_BYTES = 3
+
+    /** Exactly what the advertiser transmits: one Service Data structure keyed by our UUID. */
+    const val ADVERTISED_BYTES = AD_STRUCTURE_HEADER_BYTES + UUID_128_BYTES + PAYLOAD_BYTES
+
+    /**
+     * A tag as an `Int`, for the gate's lookup table. The scan callback runs for every packet in
+     * range, so keying the table by a primitive rather than a hex string keeps that path free of
+     * allocation.
+     */
+    fun tagKey(tag: ByteArray): Int {
+        require(tag.size >= TAG_BYTES) { "tag must be at least $TAG_BYTES bytes" }
+        return (tag[0].toInt() and 0xFF shl 24) or
+            (tag[1].toInt() and 0xFF shl 16) or
+            (tag[2].toInt() and 0xFF shl 8) or
+            (tag[3].toInt() and 0xFF)
+    }
 
     /**
      * Non-reversible handle for a credential, sent in the clear. Truncating to [TAG_BYTES] means

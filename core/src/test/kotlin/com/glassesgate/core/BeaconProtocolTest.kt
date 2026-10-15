@@ -35,10 +35,48 @@ class BeaconProtocolTest {
     }
 
     @Test
-    fun `payload fits in a legacy BLE advertisement`() {
-        // 31 bytes total, minus the flags header, minus the service-data header and its UUID
-        // reference. Anything past roughly 20 risks being silently dropped by the stack.
-        assertTrue(BeaconProtocol.PAYLOAD_BYTES <= 20)
+    fun `the advertisement fits in a legacy BLE packet`() {
+        // The earlier version of this test asserted the payload was "under 20 bytes", which was
+        // true and beside the point: the advertiser also sent the 128-bit UUID as a service-UUID
+        // list, putting the packet at 48 bytes, and Android rejected every attempt. This test
+        // checks the number that actually has to fit.
+        assertEquals(30, BeaconProtocol.ADVERTISED_BYTES)
+        assertTrue(BeaconProtocol.ADVERTISED_BYTES <= BeaconProtocol.LEGACY_ADVERTISING_BYTES)
+    }
+
+    @Test
+    fun `there is no room to also send the UUID list`() {
+        // Documents why the advertisement is service data only. Filtering on the UUID list would
+        // be convenient for the scanner, and it is exactly what broke the beacon before.
+        val withUuidList = BeaconProtocol.ADVERTISED_BYTES +
+            BeaconProtocol.AD_STRUCTURE_HEADER_BYTES + BeaconProtocol.UUID_128_BYTES
+        assertTrue(withUuidList > BeaconProtocol.LEGACY_ADVERTISING_BYTES)
+    }
+
+    @Test
+    fun `the beacon must stay non-connectable`() {
+        // Android prepends a flags structure to connectable advertisements. There is one spare
+        // byte, so making the beacon connectable would push it over the limit.
+        val withFlags = BeaconProtocol.ADVERTISED_BYTES + BeaconProtocol.FLAGS_STRUCTURE_BYTES
+        assertTrue(withFlags > BeaconProtocol.LEGACY_ADVERTISING_BYTES)
+    }
+
+    @Test
+    fun `tag key is the big-endian int of the tag`() {
+        assertEquals(0x01020304, BeaconProtocol.tagKey(byteArrayOf(1, 2, 3, 4)))
+        // High bit set: must not sign-extend into the other bytes.
+        assertEquals(
+            0xFF00FF80.toInt(),
+            BeaconProtocol.tagKey(byteArrayOf(-1, 0, -1, -128)),
+        )
+    }
+
+    @Test
+    fun `tag key distinguishes the tags of different credentials`() {
+        assertFalse(
+            BeaconProtocol.tagKey(BeaconProtocol.credentialTag(credentialId)) ==
+                BeaconProtocol.tagKey(BeaconProtocol.credentialTag(otherCredentialId)),
+        )
     }
 
     @Test
